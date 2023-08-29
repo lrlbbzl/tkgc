@@ -20,11 +20,13 @@ import torch.nn.modules.rnn
 from collections import defaultdict
 from rgcn.knowledge_graph import _read_triplets_as_list
 import scipy.sparse as sp
+from collections import OrderedDict
 
 
 def test(model, history_list, test_list, num_rels, num_nodes, global_graph, use_cuda, all_ans_list, all_ans_r_list, model_name, mode):
     ranks_raw, ranks_filter, mrr_raw_list, mrr_filter_list = [], [], [], []
     ranks_raw_r, ranks_filter_r, mrr_raw_list_r, mrr_filter_list_r = [], [], [], []
+    
 
     idx = 0
     if mode == "test":
@@ -35,7 +37,15 @@ def test(model, history_list, test_list, num_rels, num_nodes, global_graph, use_
             checkpoint = torch.load(model_name, map_location=torch.device('cpu'))
         print("Load Model name: {}. Using best epoch : {}".format(model_name, checkpoint['epoch']))  # use best stat checkpoint
         print("\n"+"-"*10+"start testing"+"-"*10+"\n")
-        model.load_state_dict(checkpoint['state_dict'])
+        # mp = checkpoint['state_dict']
+        # new_mp = OrderedDict()
+        # for k, v in mp:
+        #     if k not in ['evolve_model.dynamic_emb', 'evolve_model.emb_rel']:
+        #         new_mp.update({k : v})
+        # model.load_state_dict(new_mp)
+
+        model.load_state_dict(checkpoint['state_dict'], strict=False)
+
 
     model.eval()
     # do not have inverse relation in test input
@@ -194,6 +204,7 @@ def run_experiment(args, history_len=None, n_layers=None, dropout=None, n_bases=
                 # generate history graph
                 history_glist = [build_sub_graph(num_nodes, num_rels, snap, use_cuda, args.gpu) for snap in input_list]
                 output = [torch.from_numpy(_).long().cuda() for _ in output] if use_cuda else [torch.from_numpy(_).long() for _ in output]
+                # model.global_forward(global_graph)
                 _, _, loss, loss_e, loss_r, loss_con = model(history_glist, global_graph, output[0])
 
                 losses.append(loss.item())
@@ -224,18 +235,18 @@ def run_experiment(args, history_len=None, n_layers=None, dropout=None, n_bases=
                                                                     mode="train")
                 
                 if not args.relation_evaluation:  # entity prediction evalution
-                    if mrr_raw < best_mrr:
+                    if mrr_filter < best_mrr:
                         if epoch >= args.n_epochs:
                             break
                     else:
-                        best_mrr = mrr_raw
+                        best_mrr = mrr_filter
                         torch.save({'state_dict': model.state_dict(), 'epoch': epoch}, model_state_file)
                 else:
-                    if mrr_raw_r < best_mrr:
+                    if mrr_filter_r < best_mrr:
                         if epoch >= args.n_epochs:
                             break
                     else:
-                        best_mrr = mrr_raw_r
+                        best_mrr = mrr_filter_r
                         torch.save({'state_dict': model.state_dict(), 'epoch': epoch}, model_state_file)
         mrr_raw, mrr_filter, mrr_raw_r, mrr_filter_r = test(model, 
                                                             train_list+valid_list,
@@ -253,7 +264,7 @@ def run_experiment(args, history_len=None, n_layers=None, dropout=None, n_bases=
 if __name__ == '__main__':
     import warnings
     warnings.filterwarnings("ignore")
-    parser = argparse.ArgumentParser(description='TIRGN')
+    parser = argparse.ArgumentParser(description='TKGE')
 
     parser.add_argument("--gpu", type=int, default=-1,
                         help="gpu")
@@ -366,8 +377,8 @@ if __name__ == '__main__':
                         help="number of save")
 
     # configuration for fusion operation
-    parser.add_argument("--fuse", type=str, default='con', help="fusion of global embedding and evolving embedding")
-    parser.add_argument("--r-fuse", type=str, default='con', help="fusion of relation embedding")
+    parser.add_argument("--fuse", type=str, default='gate', help="fusion of global embedding and evolving embedding")
+    parser.add_argument("--r-fuse", type=str, default='gate', help="fusion of relation embedding")
 
 
 

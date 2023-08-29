@@ -1,9 +1,3 @@
-""" Knowledge graph dataset for Relational-GCN
-Code adapted from authors' implementation of Relational-GCN
-https://github.com/tkipf/relational-gcn
-https://github.com/MichSchli/RelationPrediction
-"""
-
 from __future__ import absolute_import
 from __future__ import print_function
 
@@ -24,11 +18,6 @@ _downlaod_prefix = _get_dgl_url('dataset/')
 
 class RGCNEntityDataset(object):
     """RGCN Entity Classification dataset
-
-    The dataset contains a graph depicting the connectivity of a knowledge
-    base. Currently, four knowledge bases from the
-    `RGCN paper <https://arxiv.org/pdf/1703.06103.pdf>`_ are supported: aifb,
-    mutag, bgs, and am.
 
     The original knowledge base is stored as an RDF file, and this class will
     download and parse the RDF file, and performs preprocessing.
@@ -138,11 +127,6 @@ class RGCNEntityDataset(object):
 class RGCNLinkDataset(object):
     """RGCN link prediction dataset
 
-    The dataset contains a graph depicting the connectivity of a knowledge
-    base. Currently, the knowledge bases from the
-    `RGCN paper <https://arxiv.org/pdf/1703.06103.pdf>`_ supported are
-    FB15k-237, FB15k, wn18
-
     The original knowledge base is stored as an RDF file, and this class will
     download and parse the RDF file, and performs preprocessing.
 
@@ -197,6 +181,7 @@ class RGCNLinkDataset(object):
         self.train = np.array(_read_triplets_as_list(train_path, entity_dict, relation_dict, load_time))
         self.valid = np.array(_read_triplets_as_list(valid_path, entity_dict, relation_dict, load_time))
         self.test = np.array(_read_triplets_as_list(test_path, entity_dict, relation_dict, load_time))
+        self.total = np.array(_read_triplets_as_list(train_path, entity_dict, relation_dict, load_time=False))
         self.num_nodes = len(entity_dict)
         print("# Sanity Check:  entities: {}".format(self.num_nodes))
         self.num_rels = len(relation_dict)
@@ -281,8 +266,6 @@ class RDFReader(object):
                 self.__graph.parse(file=f, format='nt')
         else:
             self.__graph.parse(file, format=rdf.util.guess_format(file))
-
-        # See http://rdflib.readthedocs.io for the rdflib documentation
 
         self.__freq = Counter(self.__graph.predicates())
 
@@ -395,10 +378,6 @@ def _load_data(dataset_str='aifb', dataset_path=None):
 
         train_idx = np.load(train_idx_file)
         test_idx = np.load(test_idx_file)
-
-        # train_names = np.load(train_names_file)
-        # test_names = np.load(test_names_file)
-        # relations_dict = pkl.load(open(rel_dict_file, 'rb'))
 
     else:
 
@@ -514,18 +493,11 @@ def _load_data(dataset_str='aifb', dataset_path=None):
 def to_unicode(input):
     # FIXME (lingfan): not sure about python 2 and 3 str compatibility
     return str(input)
-    """ lingfan: comment out for now
-    if isinstance(input, unicode):
-        return input
-    elif isinstance(input, str):
-        return input.decode('utf-8', errors='replace')
-    return str(input).decode('utf-8', errors='replace')
-    """
 
 
 def _read_dictionary(filename):
     d = {}
-    with open(filename, 'r+') as f:
+    with open(filename, 'r+', encoding='utf-8') as f:
         for line in f:
             line = line.strip().split('\t')
             d[int(line[1])] = line[0]
@@ -533,7 +505,7 @@ def _read_dictionary(filename):
 
 
 def _read_triplets(filename):
-    with open(filename, 'r+') as f:
+    with open(filename, 'r+', encoding='utf-8') as f:
         for line in f:
             processed_line = line.strip().split('\t')
             yield processed_line

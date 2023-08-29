@@ -1,9 +1,4 @@
-"""
-Utility functions for link prediction
-Most code is adapted from authors' implementation of RGCN link prediction:
-https://github.com/MichSchli/RelationPrediction
 
-"""
 import numpy as np
 import torch
 import dgl
@@ -42,8 +37,8 @@ def sort_and_rank_filter(batch_a, batch_r, score, target, all_ans):
         ground = score[i][ans]
         score[i][b_multi] = 0
         score[i][ans] = ground
-    _, indices = torch.sort(score, dim=1, descending=True)  # indices : [B, number entity]
-    indices = torch.nonzero(indices == target.view(-1, 1))  # indices : [B, 2] 第一列递增， 第二列表示对应的答案实体id在每一行的位置
+    _, indices = torch.sort(score, dim=1, descending=True)
+    indices = torch.nonzero(indices == target.view(-1, 1))
     indices = indices[:, 1].view(-1)
     return indices
 
@@ -67,8 +62,6 @@ def filter_score_r(test_triples, score, all_ans):
     for _, triple in enumerate(test_triples):
         h, r, t = triple
         ans = list(all_ans[h.item()][t.item()])
-        # print(h, r, t)
-        # print(ans)
         ans.remove(r.item())
         ans = torch.LongTensor(ans)
         score[_][ans] = -10000000  #
@@ -84,9 +77,7 @@ def r2e(triplets, num_rels):
     r_to_e = defaultdict(set)
     for j, (src, rel, dst) in enumerate(triplets):
         r_to_e[rel].add(src)
-        r_to_e[rel].add(dst)
         r_to_e[rel+num_rels].add(src)
-        r_to_e[rel+num_rels].add(dst)
     r_len = []
     e_idx = []
     idx = 0
@@ -98,25 +89,14 @@ def r2e(triplets, num_rels):
 
 
 def build_sub_graph(num_nodes, num_rels, triples, use_cuda, gpu):
-    """
-    :param node_id: node id in the large graph
-    :param num_rels: number of relation
-    :param src: relabeled src id
-    :param rel: original rel id
-    :param dst: relabeled dst id
-    :param use_cuda:
-    :return:
-    """
     def comp_deg_norm(g):
         in_deg = g.in_degrees(range(g.number_of_nodes())).float()
         in_deg[torch.nonzero(in_deg == 0).view(-1)] = 1
         norm = 1.0 / in_deg
         return norm
-
-    src, rel, dst = triples.transpose() # (3, num_triples)
-    """
-    Create adverse edge
-    """
+    # print(triples.shape)
+    triples = triples[:, :3]
+    src, rel, dst = triples.transpose()
     src, dst = np.concatenate((src, dst)), np.concatenate((dst, src))
     rel = np.concatenate((rel, rel + num_rels))
 
@@ -134,8 +114,8 @@ def build_sub_graph(num_nodes, num_rels, triples, use_cuda, gpu):
     g.r_to_e = r_to_e
     g.r_len = r_len
     if use_cuda:
-        g = g.to(gpu) 
-        g.r_to_e = torch.from_numpy(np.array(r_to_e))
+        g.to(gpu)
+        g.r_to_e = torch.from_numpy(np.array(r_to_e)).long()
     return g
 
 def get_total_rank(test_triples, score, all_ans, eval_bz, rel_predict=0):
@@ -176,10 +156,14 @@ def stat_ranks(rank_list, method):
     total_rank = torch.cat(rank_list)
 
     mrr = torch.mean(1.0 / total_rank.float())
-    print("MRR ({}): {:.6f}".format(method, mrr.item()))
+    if method.startswith('filter'):
+        print("MRR ({}): {:.6f}".format(method, mrr.item()))
+    hit_result = []
     for hit in hits:
         avg_count = torch.mean((total_rank <= hit).float())
-        print("Hits ({}) @ {}: {:.6f}".format(method, hit, avg_count.item()))
+        hit_result.append(avg_count)
+        if method.startswith('filter'):
+            print("Hits ({}) @ {}: {:.6f}".format(method, hit, avg_count.item()))
     return mrr
 
 
@@ -193,12 +177,6 @@ def flatten(l):
     return flatten_l
 
 def UnionFindSet(m, edges):
-    """
-
-    :param m:
-    :param edges:
-    :return: union number in a graph
-    """
     roots = [i for i in range(m)]
     rank = [0 for i in range(m)]
     count = m
@@ -290,22 +268,10 @@ def load_all_answers_for_filter(total_data, num_rel, rel_p=False):
 
 def load_all_answers_for_time_filter(total_data, num_rels, num_nodes, rel_p=False):
     all_ans_list = []
-    all_snap = split_by_time(total_data)
+    all_snap, nouse = split_by_time(total_data)
     for snap in all_snap:
         all_ans_t = load_all_answers_for_filter(snap, num_rels, rel_p)
         all_ans_list.append(all_ans_t)
-
-    # output_label_list = []
-    # for all_ans in all_ans_list:
-    #     output = []
-    #     ans = []
-    #     for e1 in all_ans.keys():
-    #         for r in all_ans[e1].keys():
-    #             output.append([e1, r])
-    #             ans.append(list(all_ans[e1][r]))
-    #     output = torch.from_numpy(np.array(output))
-    #     output_label_list.append((output, ans))
-    # return output_label_list
     return all_ans_list
 
 def split_by_time(data):
@@ -316,8 +282,7 @@ def split_by_time(data):
     for i in range(len(data)):
         t = data[i][3]
         train = data[i]
-        # latest_t表示读取的上一个三元组发生的时刻，要求数据集中的三元组是按照时间发生顺序排序的
-        if latest_t != t:  # 同一时刻发生的三元组
+        if latest_t != t:
             # show snapshot
             latest_t = t
             if len(snapshot):
@@ -325,7 +290,6 @@ def split_by_time(data):
                 snapshots_num += 1
             snapshot = []
         snapshot.append(train[:3])
-    # 加入最后一个shapshot
     if len(snapshot) > 0:
         snapshot_list.append(np.array(snapshot).copy())
         snapshots_num += 1
@@ -339,18 +303,18 @@ def split_by_time(data):
         edges = np.reshape(edges, (2, -1))
         nodes.append(len(uniq_v))
         rels.append(len(uniq_r)*2)
+    times = set()
+    for triple in data:
+        times.add(triple[3])
+    times = list(times)
+    times.sort()
     print("# Sanity Check:  ave node num : {:04f}, ave rel num : {:04f}, snapshots num: {:04d}, max edges num: {:04d}, min edges num: {:04d}, max union rate: {:.4f}, min union rate: {:.4f}"
           .format(np.average(np.array(nodes)), np.average(np.array(rels)), len(snapshot_list), max([len(_) for _ in snapshot_list]), min([len(_) for _ in snapshot_list]), max(union_num), min(union_num)))
-    return snapshot_list
+    return snapshot_list, np.asarray(times)
 
 
 def slide_list(snapshots, k=1):
-    """
-    :param k: padding K history for sequence stat
-    :param snapshots: all snapshot
-    :return:
-    """
-    k = k  # k=1 需要取长度k的历史，在加1长度的label
+    k = k
     if k > len(snapshots):
         print("ERROR: history length exceed the length of snapshot: {}>{}".format(k, len(snapshots)))
     for _ in tqdm(range(len(snapshots)-k+1)):
@@ -377,9 +341,9 @@ def construct_snap(test_triples, num_nodes, num_rels, final_score, topK):
         for index in top_indices[_]:
             h, r = test_triples[_][0], test_triples[_][1]
             if r < num_rels:
-                predict_triples.append([test_triples[_][0], r, index])
+                predict_triples.append([test_triples[_][0], r, index, test_triples[_][3]])
             else:
-                predict_triples.append([index, r-num_rels, test_triples[_][0]])
+                predict_triples.append([index, r-num_rels, test_triples[_][0], test_triples[_][3]])
 
     # 转化为numpy array
     predict_triples = np.array(predict_triples, dtype=int)
@@ -389,11 +353,6 @@ def construct_snap_r(test_triples, num_nodes, num_rels, final_score, topK):
     sorted_score, indices = torch.sort(final_score, dim=1, descending=True)
     top_indices = indices[:, :topK]
     predict_triples = []
-    # for _ in range(len(test_triples)):
-    #     h, r = test_triples[_][0], test_triples[_][1]
-    #     if (sorted_score[_][0]-sorted_score[_][1])/sorted_score[_][0] > 0.3:
-    #         if r < num_rels:
-    #             predict_triples.append([h, r, indices[_][0]])
 
     for _ in range(len(test_triples)):
         for index in top_indices[_]:
@@ -405,7 +364,6 @@ def construct_snap_r(test_triples, num_nodes, num_rels, final_score, topK):
                 predict_triples.append([t, index-num_rels, h])
                 #predict_triples.append([t, index-num_rels, h])
 
-    # 转化为numpy array
     predict_triples = np.array(predict_triples, dtype=int)
     return predict_triples
 

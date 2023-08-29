@@ -107,6 +107,12 @@ class EGS(nn.Module):
         self.decoder_ob = ConvTransE(num_nodes, hidden_dim, self.dropout, self.dropout, self.dropout)
         self.rdecoder = ConvTransR(num_rels, hidden_dim, self.dropout, self.dropout, self.dropout)
 
+    def global_forward(self, global_graph):
+        total_e = F.normalize(self.ent_global_embedding(global_graph.ndata['id'].squeeze(1)))
+        global_graph.edata['r_h'] = self.rel_global_embedding(global_graph.edata['type'])
+        new_features = F.normalize(self.global_model(global_graph, total_e))
+        return None
+
 
     def forward(self, input_list, global_graph, triples):
         """
@@ -117,7 +123,7 @@ class EGS(nn.Module):
         total_e = F.normalize(self.ent_global_embedding(global_graph.ndata['id'].squeeze(1)))
         global_graph.edata['r_h'] = self.rel_global_embedding(global_graph.edata['type'])
         new_features = F.normalize(self.global_model(global_graph, total_e))
-        # self.ent_global_embedding.weight.data = F.normalize(new_features)
+
         
         self.evolve_model.dynamic_emb = self.ent_evolve_embedding.weight
         self.evolve_model.emb_rel = self.rel_evolve_embedding.weight
@@ -160,7 +166,7 @@ class EGS(nn.Module):
             score_rel = self.rdecoder.forward(ent_emb, r_emb, all_triples, mode="train").view(-1, 2 * self.num_rels)
             loss_rel += self.loss_r(score_rel, all_triples[:, 1])
 
-        logits = ent_emb.mm(self.ent_global_embedding.weight.t())
+        logits = last_snap_embs.mm(new_features.t())
         labels = torch.arange(self.num_nodes).to(device)
         contrastive_loss = self.func(logits, labels)
         loss = self.task * loss_ent + (1 - self.task) * loss_rel + 0.5 * contrastive_loss

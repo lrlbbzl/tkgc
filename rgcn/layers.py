@@ -2,6 +2,7 @@ import dgl.function as fn
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 
 class RGCNLayer(nn.Module):
@@ -54,13 +55,8 @@ class RGCNLayer(nn.Module):
         # self.skip_connect_weight.register_hook(lambda g: print("grad of skip connect weight: {}".format(g)))
         if len(prev_h) != 0 and self.skip_connect:
             skip_weight = F.sigmoid(torch.mm(prev_h, self.skip_connect_weight) + self.skip_connect_bias)     # 使用sigmoid，让值在0~1
-            # print("skip_ weight")
-            # print(skip_weight)
-            # print("skip connect weight")
-            # print(self.skip_connect_weight)
-            # print(torch.mm(prev_h, self.skip_connect_weight))
 
-        self.propagate(g)  # 这里是在计算从周围节点传来的信息
+        self.propagate(g)
 
         # apply bias and activation
         node_repr = g.ndata['h']
@@ -173,7 +169,6 @@ class RGCNBlockLayer(RGCNLayer):
 
     def propagate(self, g):
         g.update_all(self.msg_func, fn.sum(msg='msg', out='h'), self.apply_func)
-        # g.updata_all ({'msg': msg} , fn.sum(msg='msg', out='h'), {'h': nodes.data['h'] * nodes.data[''norm]})
 
     def apply_func(self, nodes):
         return {'h': nodes.data['h'] * nodes.data['norm']}
@@ -216,6 +211,15 @@ class UnionRGCNLayer(nn.Module):
         else:
             self.dropout = None
 
+        channels = 1
+        kernel_size = 1
+        self.conv1d = torch.nn.Conv1d(2, channels, kernel_size, stride=1,
+                                      padding=int(math.floor(kernel_size / 2)))
+        self.fc = torch.nn.Linear(self.out_feat * channels, self.out_feat)
+        self.gnn_bn0 = torch.nn.BatchNorm1d(2)
+        self.gnn_bn1 = torch.nn.BatchNorm1d(channels)
+        self.gnn_bn2 = torch.nn.BatchNorm1d(self.out_feat)
+
     def propagate(self, g):
         g.update_all(lambda x: self.msg_func(x), fn.sum(msg='msg', out='h'), self.apply_func)
 
@@ -224,8 +228,6 @@ class UnionRGCNLayer(nn.Module):
         # self.sub = sub
         # self.ob = ob
         if self.self_loop:
-            #loop_message = torch.mm(g.ndata['h'], self.loop_weight)
-            # masked_index = torch.masked_select(torch.arange(0, g.number_of_nodes(), dtype=torch.long), (g.in_degrees(range(g.number_of_nodes())) > 0))
             masked_index = torch.masked_select(
                 torch.arange(0, g.number_of_nodes(), dtype=torch.long).cuda(),
                 (g.in_degrees(range(g.number_of_nodes())) > 0))
@@ -255,23 +257,18 @@ class UnionRGCNLayer(nn.Module):
         return node_repr
 
     def msg_func(self, edges):
-        # if reverse:
-        #     relation = self.rel_emb.index_select(0, edges.data['type_o']).view(-1, self.out_feat)
-        # else:
-        #     relation = self.rel_emb.index_select(0, edges.data['type_s']).view(-1, self.out_feat)
         relation = self.rel_emb.index_select(0, edges.data['type']).view(-1, self.out_feat)
         edge_type = edges.data['type']
         edge_num = edge_type.shape[0]
         node = edges.src['h'].view(-1, self.out_feat)
-        # node = torch.cat([torch.matmul(node[:edge_num // 2, :], self.sub),
-        #                  torch.matmul(node[edge_num // 2:, :], self.ob)])
-        # node = torch.matmul(node, self.sub)
 
-        # after add inverse edges, we only use message pass when h as tail entity
-        # 这里计算的是每个节点发出的消息，节点发出消息时其作为头实体
-        # msg = torch.cat((node, relation), dim=1)
-        msg = node + relation
-        # calculate the neighbor message with weight_neighbor
+        batch_size = node.shape[0]
+        node = node.unsqueeze(1)
+        relation = relation.unsqueeze(1)
+        stacked_inputs = torch.cat([node, relation], 1)
+        stacked_inputs = self.gnn_bn0(stacked_inputs)
+        msg = self.conv1d(stacked_inputs)
+        msg = msg.view(batch_size, -1)
         msg = torch.mm(msg, self.weight_neighbor)
         return {'msg': msg}
 
