@@ -83,6 +83,7 @@ def test(model, history_list, test_list, num_rels, num_nodes, global_graph, use_
             one_hot_tail_seq = one_hot_tail_seq.cuda()
             one_hot_rel_seq = one_hot_rel_seq.cuda()
 
+        global_graph = build_sub_graph(num_nodes, num_rels, global_graph, use_cuda, args.gpu)
         test_triples, final_score, final_r_score = model.predict(history_glist, num_rels, global_graph, test_triples_input, use_cuda)
 
         mrr_filter_snap_r, mrr_snap_r, rank_raw_r, rank_filter_r = utils.get_total_rank(test_triples, final_r_score, all_ans_r_list[time_idx], eval_bz=1000, rel_predict=1)
@@ -150,6 +151,7 @@ def run_experiment(args, history_len=None, n_layers=None, dropout=None, n_bases=
     print("loading graph data")
     data = utils.load_data(args.dataset)   # data class, RGCNLinkDataset
     train_list, train_times = utils.split_by_time(data.train)   # split into time-specific data
+    print(len(train_list[0][0]))
     valid_list, valid_times = utils.split_by_time(data.valid)
     test_list, test_times = utils.split_by_time(data.test)
 
@@ -178,12 +180,13 @@ def run_experiment(args, history_len=None, n_layers=None, dropout=None, n_bases=
     print("Sanity Check: Cuda: {}".format(torch.cuda.is_available()))
 
     use_cuda = args.gpu >= 0 and torch.cuda.is_available()
-    
-    model = EGS(data.total, 'rgat', args.global_layers, args.global_heads, num_nodes, num_rels, args.n_hidden, args.task_weight, args.entity_prediction, 
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    global_graph = build_sub_graph(num_nodes, num_rels, data.total, use_cuda, args.gpu).to(device)
+    model = EGS(global_graph, args.global_gnn, args.global_layers, args.global_heads, num_nodes, num_rels, args.n_hidden, args.task_weight, args.entity_prediction, 
                 args.relation_prediction, args.fuse, args.r_fuse, args.n_bases, args.n_basis, args.n_layers, args.dropout, 
-                args.self_loop, args.skip_connect, args.encoder, args.decoder, args.opn, args.layer_norm, use_cuda, args.gpu)
+                args.self_loop, args.skip_connect, args.encoder, args.decoder, args.opn, args.layer_norm, use_cuda, args.gpu, args.run_analysis).to(device)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=args['lr'], weight_decay=1e-5)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
 
     if args.test and os.path.exists(model_state_file):
         mrr_raw, mrr_filter, mrr_raw_r, mrr_filter_r = test(model, 
@@ -191,7 +194,7 @@ def run_experiment(args, history_len=None, n_layers=None, dropout=None, n_bases=
                                                             test_list, 
                                                             num_rels, 
                                                             num_nodes,
-                                                            data.total, 
+                                                            global_graph, 
                                                             use_cuda, 
                                                             all_ans_list_test, 
                                                             all_ans_list_r_test, 
@@ -224,7 +227,7 @@ def run_experiment(args, history_len=None, n_layers=None, dropout=None, n_bases=
                 # generate history graph
                 history_glist = [build_sub_graph(num_nodes, num_rels, snap, use_cuda, args.gpu) for snap in input_list]
                 output = [torch.from_numpy(_).long().cuda() for _ in output] if use_cuda else [torch.from_numpy(_).long() for _ in output]
-                _, _, loss = model(history_glist, data.total, output[0])
+                _, _, loss = model(history_glist, global_graph, output[0])
 
                 losses.append(loss.item())
                 # losses_e.append(loss_e.item())
@@ -246,7 +249,7 @@ def run_experiment(args, history_len=None, n_layers=None, dropout=None, n_bases=
                                                                     valid_list, 
                                                                     num_rels, 
                                                                     num_nodes, 
-                                                                    data.total, 
+                                                                    global_graph, 
                                                                     use_cuda, 
                                                                     all_ans_list_valid, 
                                                                     all_ans_list_r_valid, 
@@ -272,7 +275,7 @@ def run_experiment(args, history_len=None, n_layers=None, dropout=None, n_bases=
                                                             test_list, 
                                                             num_rels, 
                                                             num_nodes, 
-                                                            data.total,
+                                                            global_graph,
                                                             use_cuda, 
                                                             all_ans_list_test, 
                                                             all_ans_list_r_test, 
@@ -389,7 +392,9 @@ if __name__ == '__main__':
     # configuration for global history
     parser.add_argument("--history-rate", type=float, default=0.3,
                         help="history rate")
-
+    parser.add_argument("--global-gnn", type=str, default='rgat', help='type of gnn in global graph')
+    parser.add_argument("--global-heads", type=int, default=4, help='heads of attention during RGAT')
+    parser.add_argument("--global-layers", type=int, default=2, help='numbers of propagation')
     parser.add_argument("--save", type=str, default="one",
                         help="number of save")
 

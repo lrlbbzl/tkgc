@@ -3,7 +3,6 @@ from torch import nn
 import torch.nn.functional as F
 from src.rrgcn import RGCNCell, RecurrentRGCN
 from src.gats import GNN
-
 from src.decoder import ConvTransE, ConvTransR
 
 
@@ -11,7 +10,7 @@ class EGS(nn.Module):
     def __init__(self, graph, global_gnn, global_layer_num, global_heads, num_nodes, num_rels, 
                 hidden_dim, task, entity_prediction, relation_prediction, fuse, r_fuse, 
                 num_bases, num_basis, evolve_layer_num, dropout, self_loop, skip_connect,
-                encoder, decoder, opn, layer_norm, use_cuda, gpu):
+                encoder, decoder, opn, layer_norm, use_cuda, gpu, analysis):
         super().__init__()
         self.total_graph = graph
         self.global_gnn = global_gnn
@@ -27,8 +26,8 @@ class EGS(nn.Module):
         self.r_fuse = r_fuse
         self.ent_global_embedding = nn.Embedding(self.num_nodes, self.hidden_dim)
         self.ent_evolve_embedding = nn.Embedding(self.num_nodes, self.hidden_dim)
-        self.rel_global_embedding = nn.Embedding(self.num_rels, self.hidden_dim)
-        self.rel_evolve_embedding = nn.Embedding(self.num_rels, self.hidden_dim)
+        self.rel_global_embedding = nn.Embedding(self.num_rels * 2, self.hidden_dim)
+        self.rel_evolve_embedding = nn.Embedding(self.num_rels * 2, self.hidden_dim)
 
         nn.init.xavier_normal_(self.ent_global_embedding.weight, gain=1.414)
         nn.init.xavier_normal_(self.ent_evolve_embedding.weight, gain=1.414)
@@ -71,6 +70,7 @@ class EGS(nn.Module):
                 relation_prediction=relation_prediction,
                 use_cuda=use_cuda,
                 gpu = gpu,
+                analysis=analysis
             )
         
         self.time_gate_weight = nn.Parameter(torch.Tensor(self.hidden_dim, self.hidden_dim))    
@@ -114,25 +114,25 @@ class EGS(nn.Module):
         """
 
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
-        total_e = self.ent_global_embedding[global_graph.r_to_e]
-        global_graph.edata['r_h'] = self.rel_global_embedding(global_graph.edata['etype'])
-        self.ent_global_embedding = F.normalize(self.global_model(global_graph, total_e))
+        total_e = F.normalize(self.ent_global_embedding(global_graph.ndata['id'].squeeze(1)))
+        global_graph.edata['r_h'] = self.rel_global_embedding(global_graph.edata['type'])
+        new_features = F.normalize(self.global_model(global_graph, total_e))
+        # self.ent_global_embedding.weight.data = F.normalize(new_features)
         
-        self.evolve_model.dynamic_emb = self.ent_evolve_embedding.weight
-        self.evolve_model.emb_rel = self.rel_evolve_embedding.weight
+        self.evolve_model.dynamic_emb = self.ent_evolve_embedding.weight.to(device)
+        self.evolve_model.emb_rel = self.rel_evolve_embedding.weight.to(device)
         # evolve embeddings forward
-        evolve_embs, static_emb, r_emb, _, _ = self.evolve_model(input_list)
+        evolve_embs, static_emb, r_emb, _, _ = self.evolve_model(input_list, use_cuda=True)
         last_snap_embs = F.normalize(evolve_embs[-1])
         ## Fuse evolve and global embeddings of entities and relations
         if self.fuse == 'con':
-            ent_emb = self.linear_fuse(torch.cat((last_snap_embs, self.ent_global_embedding.weight), 1))
+            ent_emb = self.linear_fuse(torch.cat((last_snap_embs, new_features), 1))
         elif self.fuse == 'att':
-            ent_emb, e_cof = self.fuse_attention(last_snap_embs, self.ent_global_embedding.weight, self.en_embedding.weight)
+            ent_emb, e_cof = self.fuse_attention(last_snap_embs, new_features, self.ent_global_embedding.weight)
         elif self.fuse == 'att1':
-            ent_emb, e_cof = self.fuse_attention1(last_snap_embs, self.ent_global_embedding.weight)
+            ent_emb, e_cof = self.fuse_attention1(last_snap_embs, new_features)
         elif self.fuse == 'gate':
-            ent_emb, e_cof = self.gate(last_snap_embs, self.ent_global_embedding.weight)
+            ent_emb, e_cof = self.gate(last_snap_embs, new_features)
         # relation embedding fusion
         if self.r_fuse == 'short':
             r_emb = r_emb
@@ -166,7 +166,7 @@ class EGS(nn.Module):
 
         loss = self.task * loss_ent + (1 - self.task) * loss_rel + 0.5 * contrastive_loss
 
-        return evolve_embs, r_emb, loss
+        return ent_emb, r_emb, loss
 
     def predict(self, test_graph, num_rels, global_graph, test_triplets, use_cuda):
         with torch.no_grad():
@@ -174,8 +174,8 @@ class EGS(nn.Module):
             inverse_test_triplets[:, 1] = inverse_test_triplets[:, 1] + num_rels  # 将逆关系换成逆关系的id
             all_triples = torch.cat((test_triplets, inverse_test_triplets))
             
-            evolve_embs, r_emb, _ = self.forward(test_graph, global_graph, test_triplets)
-            embedding = F.normalize(evolve_embs[-1]) if self.layer_norm else evolve_embs[-1]
+            ent_emb, r_emb, _ = self.forward(test_graph, global_graph, test_triplets)
+            embedding = F.normalize(ent_emb) if self.layer_norm else ent_emb
 
             score = self.decoder_ob.forward(embedding, r_emb, all_triples, mode="test")
             score_rel = self.rdecoder.forward(embedding, r_emb, all_triples, mode="test")

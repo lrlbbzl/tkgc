@@ -28,7 +28,7 @@ class ConvTransR(torch.nn.Module):
 
     def forward(self, embedding, emb_rel, triplets, nodes_id=None, mode="train", negative_rate=0):
 
-        e1_embedded_all = torch.tanh(embedding)
+        e1_embedded_all = F.tanh(embedding)
         batch_size = len(triplets)
         # if mode=="train":
         e1_embedded = e1_embedded_all[triplets[:, 0]].unsqueeze(1)
@@ -76,7 +76,7 @@ class ConvTransE(torch.nn.Module):
         self.bn_init = torch.nn.BatchNorm1d(embedding_dim)
 
     def forward(self, embedding, emb_rel, triplets, nodes_id=None, mode="train", negative_rate=0, partial_embeding=None):
-        e1_embedded_all = torch.tanh(embedding)
+        e1_embedded_all = F.tanh(embedding)
         batch_size = len(triplets)
         e1_embedded = e1_embedded_all[triplets[:, 0]].unsqueeze(1)
         rel_embedded = emb_rel[triplets[:, 1]].unsqueeze(1)
@@ -101,7 +101,7 @@ class ConvTransE(torch.nn.Module):
 
     def forward_slow(self, embedding, emb_rel, triplets):
 
-        e1_embedded_all = torch.tanh(embedding)
+        e1_embedded_all = F.tanh(embedding)
         # e1_embedded_all = embedding
         batch_size = len(triplets)
         e1_embedded = e1_embedded_all[triplets[:, 0]].unsqueeze(1)
