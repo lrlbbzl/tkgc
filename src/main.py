@@ -22,7 +22,7 @@ from rgcn.knowledge_graph import _read_triplets_as_list
 import scipy.sparse as sp
 
 
-def test(model, history_list, test_list, num_rels, num_nodes, global_graph, use_cuda, all_ans_list, all_ans_r_list, model_name, time_list, history_time_nogt, mode):
+def test(model, history_list, test_list, num_rels, num_nodes, global_graph, use_cuda, all_ans_list, all_ans_r_list, model_name, mode):
     ranks_raw, ranks_filter, mrr_raw_list, mrr_filter_list = [], [], [], []
     ranks_raw_r, ranks_filter_r, mrr_raw_list_r, mrr_filter_list_r = [], [], [], []
 
@@ -41,50 +41,18 @@ def test(model, history_list, test_list, num_rels, num_nodes, global_graph, use_
     # do not have inverse relation in test input
     input_list = [snap for snap in history_list[-args.test_history_len:]]
 
-    if args.multi_step:
-        all_tail_seq = sp.load_npz(
-            '../data/{}/history/tail_history_{}.npz'.format(args.dataset, history_time_nogt))
-        # rel
-        all_rel_seq = sp.load_npz(
-            '../data/{}/history/rel_history_{}.npz'.format(args.dataset, history_time_nogt))
+    # if args.multi_step:
+    #     all_tail_seq = sp.load_npz(
+    #         '../data/{}/history/tail_history_{}.npz'.format(args.dataset, history_time_nogt))
+    #     # rel
+    #     all_rel_seq = sp.load_npz(
+    #         '../data/{}/history/rel_history_{}.npz'.format(args.dataset, history_time_nogt))
 
     for time_idx, test_snap in enumerate(tqdm(test_list)):
         history_glist = [build_sub_graph(num_nodes, num_rels, g, use_cuda, args.gpu) for g in input_list]
         test_triples_input = torch.LongTensor(test_snap).cuda() if use_cuda else torch.LongTensor(test_snap)
         test_triples_input = test_triples_input.to(args.gpu)
-
-        # get history
-        histroy_data = test_triples_input
-        inverse_histroy_data = histroy_data[:, [2, 1, 0, 3]]
-        inverse_histroy_data[:, 1] = inverse_histroy_data[:, 1] + num_rels
-        histroy_data = torch.cat([histroy_data, inverse_histroy_data])
-        histroy_data = histroy_data.cpu().numpy()
-        if args.multi_step:
-            seq_idx = histroy_data[:, 0] * num_rels * 2 + histroy_data[:, 1]
-            tail_seq = torch.Tensor(all_tail_seq[seq_idx].todense())
-            one_hot_tail_seq = tail_seq.masked_fill(tail_seq != 0, 1)
-            # rel
-            rel_seq_idx = histroy_data[:, 0] * num_nodes + histroy_data[:, 2]
-            rel_seq = torch.Tensor(all_rel_seq[rel_seq_idx].todense())
-            one_hot_rel_seq = rel_seq.masked_fill(rel_seq != 0, 1)
-        else:
-            all_tail_seq = sp.load_npz(
-                '../data/{}/history/tail_history_{}.npz'.format(args.dataset, time_list[time_idx]))
-            seq_idx = histroy_data[:, 0] * num_rels * 2 + histroy_data[:, 1]
-            tail_seq = torch.Tensor(all_tail_seq[seq_idx].todense())
-            one_hot_tail_seq = tail_seq.masked_fill(tail_seq != 0, 1)
-            # rel
-            all_rel_seq = sp.load_npz(
-                '../data/{}/history/rel_history_{}.npz'.format(args.dataset, time_list[time_idx]))
-            rel_seq_idx = histroy_data[:, 0] * num_nodes + histroy_data[:, 2]
-            rel_seq = torch.Tensor(all_rel_seq[rel_seq_idx].todense())
-            one_hot_rel_seq = rel_seq.masked_fill(rel_seq != 0, 1)
-        if use_cuda:
-            one_hot_tail_seq = one_hot_tail_seq.cuda()
-            one_hot_rel_seq = one_hot_rel_seq.cuda()
-
-        global_graph = build_sub_graph(num_nodes, num_rels, global_graph, use_cuda, args.gpu)
-        test_triples, final_score, final_r_score = model.predict(history_glist, num_rels, global_graph, test_triples_input, use_cuda)
+        test_triples, final_score, final_r_score = model.predict(history_glist, num_rels, global_graph, test_triples_input)
 
         mrr_filter_snap_r, mrr_snap_r, rank_raw_r, rank_filter_r = utils.get_total_rank(test_triples, final_r_score, all_ans_r_list[time_idx], eval_bz=1000, rel_predict=1)
         mrr_filter_snap, mrr_snap, rank_raw, rank_filter = utils.get_total_rank(test_triples, final_score, all_ans_list[time_idx], eval_bz=1000, rel_predict=0)
@@ -116,11 +84,11 @@ def test(model, history_list, test_list, num_rels, num_nodes, global_graph, use_
             input_list.append(test_snap)
         idx += 1
     
-    mrr_raw, hit_result_raw = utils.stat_ranks(ranks_raw, "raw_ent")
-    mrr_filter, hit_result_filter = utils.stat_ranks(ranks_filter, "filter_ent")
-    mrr_raw_r, hit_result_raw_r = utils.stat_ranks(ranks_raw_r, "raw_rel")
-    mrr_filter_r, hit_result_filter_r = utils.stat_ranks(ranks_filter_r, "filter_rel")
-    return mrr_raw, mrr_filter, mrr_raw_r, mrr_filter_r, hit_result_raw, hit_result_filter, hit_result_raw_r, hit_result_filter_r
+    mrr_raw = utils.stat_ranks(ranks_raw, "raw_ent")
+    mrr_filter = utils.stat_ranks(ranks_filter, "filter_ent")
+    mrr_raw_r = utils.stat_ranks(ranks_raw_r, "raw_rel")
+    mrr_filter_r = utils.stat_ranks(ranks_filter_r, "filter_rel")
+    return mrr_raw, mrr_filter, mrr_raw_r, mrr_filter_r
 
 
 def run_experiment(args, history_len=None, n_layers=None, dropout=None, n_bases=None, angle=None, history_rate=None):
@@ -151,7 +119,6 @@ def run_experiment(args, history_len=None, n_layers=None, dropout=None, n_bases=
     print("loading graph data")
     data = utils.load_data(args.dataset)   # data class, RGCNLinkDataset
     train_list, train_times = utils.split_by_time(data.train)   # split into time-specific data
-    print(len(train_list[0][0]))
     valid_list, valid_times = utils.split_by_time(data.valid)
     test_list, test_times = utils.split_by_time(data.test)
 
@@ -175,7 +142,7 @@ def run_experiment(args, history_len=None, n_layers=None, dropout=None, n_bases=
     all_ans_list_r_valid = utils.load_all_answers_for_time_filter(data.valid, num_rels, num_nodes, True)
 
     local_time = time.localtime()
-    model_name = "{}_{}_{}_{}.mdl".format(args.dataset, local_time.tm_mon, local_time.tm_mday, local_time.tm_hour)
+    model_name = "{}_{}_{}_{}.mdl".format(args.dataset, args.global_gnn, args.encoder, args.decoder)
     model_state_file = "../models/" + model_name
     print("Sanity Check: Cuda: {}".format(torch.cuda.is_available()))
 
@@ -210,7 +177,7 @@ def run_experiment(args, history_len=None, n_layers=None, dropout=None, n_bases=
             losses = []
             losses_e = []
             losses_r = []
-            losses_static = []
+            losses_con = []
 
             idx = [_ for _ in range(len(train_list))]
             random.shuffle(idx)
@@ -227,12 +194,12 @@ def run_experiment(args, history_len=None, n_layers=None, dropout=None, n_bases=
                 # generate history graph
                 history_glist = [build_sub_graph(num_nodes, num_rels, snap, use_cuda, args.gpu) for snap in input_list]
                 output = [torch.from_numpy(_).long().cuda() for _ in output] if use_cuda else [torch.from_numpy(_).long() for _ in output]
-                _, _, loss = model(history_glist, global_graph, output[0])
+                _, _, loss, loss_e, loss_r, loss_con = model(history_glist, global_graph, output[0])
 
                 losses.append(loss.item())
-                # losses_e.append(loss_e.item())
-                # losses_r.append(loss_r.item())
-                # losses_static.append(loss_static.item())
+                losses_e.append(loss_e.item())
+                losses_r.append(loss_r.item())
+                losses_con.append(loss_con.item())
 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_norm)  # clip gradients
@@ -240,7 +207,7 @@ def run_experiment(args, history_len=None, n_layers=None, dropout=None, n_bases=
                 optimizer.zero_grad()
 
             print("Epoch {:04d} | Ave Loss: {:.4f} | entity-relation-static:{:.4f}-{:.4f}-{:.4f} Best MRR {:.4f} | Model {} "
-                  .format(epoch, np.mean(losses), np.mean(losses_e), np.mean(losses_r), np.mean(losses_static), best_mrr, model_name))
+                  .format(epoch, np.mean(losses), np.mean(losses_e), np.mean(losses_r), np.mean(losses_con), best_mrr, model_name))
 
             # validation
             if epoch and epoch % args.evaluate_every == 0:

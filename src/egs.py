@@ -119,8 +119,8 @@ class EGS(nn.Module):
         new_features = F.normalize(self.global_model(global_graph, total_e))
         # self.ent_global_embedding.weight.data = F.normalize(new_features)
         
-        self.evolve_model.dynamic_emb = self.ent_evolve_embedding.weight.to(device)
-        self.evolve_model.emb_rel = self.rel_evolve_embedding.weight.to(device)
+        self.evolve_model.dynamic_emb = self.ent_evolve_embedding.weight
+        self.evolve_model.emb_rel = self.rel_evolve_embedding.weight
         # evolve embeddings forward
         evolve_embs, static_emb, r_emb, _, _ = self.evolve_model(input_list, use_cuda=True)
         last_snap_embs = F.normalize(evolve_embs[-1])
@@ -163,12 +163,11 @@ class EGS(nn.Module):
         logits = ent_emb.mm(self.ent_global_embedding.weight.t())
         labels = torch.arange(self.num_nodes).to(device)
         contrastive_loss = self.func(logits, labels)
-
         loss = self.task * loss_ent + (1 - self.task) * loss_rel + 0.5 * contrastive_loss
 
-        return ent_emb, r_emb, loss
+        return ent_emb, r_emb, loss, loss_ent, loss_rel, contrastive_loss
 
-    def predict(self, test_graph, num_rels, global_graph, test_triplets, use_cuda):
+    def predict(self, test_graph, num_rels, global_graph, test_triplets):
         with torch.no_grad():
             inverse_test_triplets = test_triplets[:, [2, 1, 0]]
             inverse_test_triplets[:, 1] = inverse_test_triplets[:, 1] + num_rels  # 将逆关系换成逆关系的id
