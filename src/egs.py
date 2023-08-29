@@ -173,7 +173,7 @@ class EGS(nn.Module):
             inverse_test_triplets[:, 1] = inverse_test_triplets[:, 1] + num_rels  # 将逆关系换成逆关系的id
             all_triples = torch.cat((test_triplets, inverse_test_triplets))
             
-            ent_emb, r_emb, _ = self.forward(test_graph, global_graph, test_triplets)
+            ent_emb, r_emb, _, _, _, _ = self.forward(test_graph, global_graph, test_triplets)
             embedding = F.normalize(ent_emb) if self.layer_norm else ent_emb
 
             score = self.decoder_ob.forward(embedding, r_emb, all_triples, mode="test")
