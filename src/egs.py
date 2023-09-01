@@ -26,6 +26,7 @@ class EGS(nn.Module):
         self.r_fuse = r_fuse
         self.ent_global_embedding = nn.Embedding(self.num_nodes, self.hidden_dim)
         self.ent_evolve_embedding = nn.Embedding(self.num_nodes, self.hidden_dim)
+        
         self.rel_global_embedding = nn.Embedding(self.num_rels * 2, self.hidden_dim)
         self.rel_evolve_embedding = nn.Embedding(self.num_rels * 2, self.hidden_dim)
 
@@ -33,6 +34,9 @@ class EGS(nn.Module):
         nn.init.xavier_normal_(self.ent_evolve_embedding.weight, gain=1.414)
         nn.init.xavier_normal_(self.rel_global_embedding.weight, gain=1.414)
         nn.init.xavier_normal_(self.rel_evolve_embedding.weight, gain=1.414)
+
+        self.ent_global_embedding.requires_grad_(requires_grad=False)
+        self.rel_global_embedding.requires_grad_(requires_grad=False)
         
         self.num_bases = num_bases
         self.num_basis = num_basis
@@ -123,6 +127,7 @@ class EGS(nn.Module):
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         total_e = F.normalize(self.ent_global_embedding(global_graph.ndata['id'].squeeze(1)))
         global_graph.edata['r_h'] = self.rel_global_embedding(global_graph.edata['type'])
+        
         new_features = F.normalize(self.global_model(global_graph, total_e))
 
         
