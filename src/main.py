@@ -4,10 +4,13 @@ import os
 import sys
 import time
 import pickle
+import random
+from copy import deepcopy
 
 import dgl
 import numpy as np
 import torch
+from torch import nn
 from tqdm import tqdm
 import random
 sys.path.append("..")
@@ -21,6 +24,8 @@ from collections import defaultdict
 from rgcn.knowledge_graph import _read_triplets_as_list
 import scipy.sparse as sp
 from collections import OrderedDict
+
+from src.pretrain import gnn_kge
 
 
 def test(model, history_list, test_list, num_rels, num_nodes, global_graph, use_cuda, all_ans_list, all_ans_r_list, model_name, mode):
@@ -159,12 +164,17 @@ def run_experiment(args, history_len=None, n_layers=None, dropout=None, n_bases=
     use_cuda = args.gpu >= 0 and torch.cuda.is_available()
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     global_graph = build_sub_graph(num_nodes, num_rels, data.total, use_cuda, args.gpu).to(device)
+    print(global_graph.ndata['id'].squeeze(1)[:10])
+
+
+    global_model = gnn_kge(global_graph, num_nodes, num_rels, args.n_hidden, args.score_func, args.layer_norm,
+                           args.num_rels, args.global_heads, args.global_gnn)
     model = EGS(global_graph, args.global_gnn, args.global_layers, args.global_heads, num_nodes, num_rels, args.n_hidden, args.task_weight, args.entity_prediction, 
                 args.relation_prediction, args.fuse, args.r_fuse, args.n_bases, args.n_basis, args.n_layers, args.dropout, 
                 args.self_loop, args.skip_connect, args.encoder, args.decoder, args.opn, args.layer_norm, use_cuda, args.gpu, args.run_analysis).to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
-
+    global_optimizer = torch.optim.Adam(global_model.parameters(), lr = args.kge_lr, weight_decay=1e-5)
     if args.test and os.path.exists(model_state_file):
         mrr_raw, mrr_filter, mrr_raw_r, mrr_filter_r = test(model, 
                                                             train_list+valid_list, 
@@ -182,6 +192,25 @@ def run_experiment(args, history_len=None, n_layers=None, dropout=None, n_bases=
     else:
         print("----------------------------------------start training----------------------------------------\n")
         best_mrr = 0
+
+        print("-----------------------------------start total graph forward----------------------------------\n")
+        loss_fn = nn.CrossEntropyLoss()
+        for epoch in range(args.n_global_epochs):
+            samples, length = deepcopy(data.total), len(data.total)
+            new_feature = global_model.gnn_forward()
+            losses = []
+            random.shuffle(samples)
+            iters = int(length // args.batch_size) + 1
+            for i in range(iters):
+                batch_data = samples[args.batch_size * i, min(length, args.batch_size * (i + 1))]
+                score = global_model(batch_data, new_feature)
+                loss = loss_fn(score, batch_data[:, 2])
+                losses.append(loss)
+                global_optimizer.zero_grad()
+                loss.backward()
+                global_optimizer.step()
+            print("Epoch {:04d} in static KGE | Ave Loss: {:.4f} ", epoch, np.mean(losses))
+                
         for epoch in range(args.n_epochs):
             model.train()
             losses = []
@@ -332,6 +361,7 @@ if __name__ == '__main__':
     # configuration for stat training
     parser.add_argument("--n-epochs", type=int, default=500,
                         help="number of minimum training epochs on each time step")
+    parser.add_argument("--n-global-epochs", type=int, default=5, help='epoch in static KGE')
     parser.add_argument("--lr", type=float, default=0.001,
                         help="learning rate")
     parser.add_argument("--grad-norm", type=float, default=1.0,
@@ -375,7 +405,8 @@ if __name__ == '__main__':
     parser.add_argument("--global-layers", type=int, default=2, help='numbers of propagation')
     parser.add_argument("--save", type=str, default="one",
                         help="number of save")
-
+    parser.add_argument("--score-func", type=str, default='rotate', help='score function in static KGE')
+    parser.add_argument("--kge-lr", type=float, default=1e-4, help='learning rate in pretraining')
     # configuration for fusion operation
     parser.add_argument("--fuse", type=str, default='gate', help="fusion of global embedding and evolving embedding")
     parser.add_argument("--r-fuse", type=str, default='gate', help="fusion of relation embedding")

@@ -107,6 +107,7 @@ class EGS(nn.Module):
         self.decoder_ob = ConvTransE(num_nodes, hidden_dim, self.dropout, self.dropout, self.dropout)
         self.rdecoder = ConvTransR(num_rels, hidden_dim, self.dropout, self.dropout, self.dropout)
 
+
     def global_forward(self, global_graph):
         total_e = F.normalize(self.ent_global_embedding(global_graph.ndata['id'].squeeze(1)))
         global_graph.edata['r_h'] = self.rel_global_embedding(global_graph.edata['type'])
