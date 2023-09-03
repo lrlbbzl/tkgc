@@ -8,6 +8,7 @@ import random
 from copy import deepcopy
 from tqdm import tqdm
 
+from transformers import get_linear_schedule_with_warmup
 import dgl
 import numpy as np
 import torch
@@ -160,6 +161,8 @@ def run_experiment(args, history_len=None, n_layers=None, dropout=None, n_bases=
     local_time = time.localtime()
     model_name = "{}_{}_{}_{}.mdl".format(args.dataset, args.global_gnn, args.encoder, args.decoder)
     model_state_file = "../models/" + model_name
+    pretrained_ent_file = "../models/pretrain/" + 'ent-' + args.score_func + '-' + str(args.n_global_epochs) + '.pkl'
+    pretrained_rel_file = "../models/pretrain/" + 'rel-' + args.score_func + '-' + str(args.n_global_epochs) + '.pkl'
     print("Sanity Check: Cuda: {}".format(torch.cuda.is_available()))
 
     use_cuda = args.gpu >= 0 and torch.cuda.is_available()
@@ -172,9 +175,16 @@ def run_experiment(args, history_len=None, n_layers=None, dropout=None, n_bases=
     model = EGS(global_graph, args.global_gnn, args.global_layers, args.global_heads, num_nodes, num_rels, args.n_hidden, args.task_weight, args.entity_prediction, 
                 args.relation_prediction, args.fuse, args.r_fuse, args.n_bases, args.n_basis, args.n_layers, args.dropout, 
                 args.self_loop, args.skip_connect, args.encoder, args.decoder, args.opn, args.layer_norm, use_cuda, args.gpu, args.run_analysis).to(device)
-    loss_fn = nn.CrossEntropyLoss(reduction='mean', weight=None)
+    
+    
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
+
+    loss_fn = nn.CrossEntropyLoss(reduction='mean', weight=None)
     global_optimizer = torch.optim.Adam(global_model.parameters(), lr = args.kge_lr, weight_decay=1e-5)
+    global_step = (len(data.total) // args.batch_size) * args.n_global_epochs if len(data.total) % args.batch_size == 0 \
+                        else (len(data.total) // args.batch_size + 1) * args.n_global_epochs
+    global_scheduler = get_linear_schedule_with_warmup(optimizer=global_optimizer, num_warmup_steps=100, num_training_steps=global_step)
+    
     if args.test and os.path.exists(model_state_file):
         mrr_raw, mrr_filter, mrr_raw_r, mrr_filter_r = test(model, 
                                                             train_list+valid_list, 
@@ -194,26 +204,32 @@ def run_experiment(args, history_len=None, n_layers=None, dropout=None, n_bases=
         best_mrr = 0
 
         print("-----------------------------------start total graph forward----------------------------------\n")
-        
-        for epoch in range(args.n_global_epochs):
-            samples, length = torch.LongTensor(deepcopy(data.total)).to(device), len(data.total)
-            # new_feature = global_model.gnn_forward()
-            losses = []
-            samples = samples[torch.randperm(samples.shape[0]), :]
-            iters = int(length // args.batch_size) + 1
-            for i in tqdm(range(iters)):
-                new_feature = global_model.gnn_forward()
-                batch_data = samples[args.batch_size * i : min(length, args.batch_size * (i + 1))]
-                score = global_model(batch_data, new_feature)
-                loss = loss_fn(score, batch_data[:, 2])
+        if not os.path.exists(pretrained_ent_file) or not os.path.exists(pretrained_rel_file):
+            for epoch in range(args.n_global_epochs):
+                samples, length = torch.LongTensor(deepcopy(data.total)).to(device), len(data.total)
+                # new_feature = global_model.gnn_forward()
+                losses = []
+                samples = samples[torch.randperm(samples.shape[0]), :]
+                iters = int(length // args.batch_size) + 1
+                for i in tqdm(range(iters)):
+                    new_feature = global_model.gnn_forward()
+                    batch_data = samples[args.batch_size * i : min(length, args.batch_size * (i + 1))]
+                    score = global_model(batch_data, new_feature)
+                    loss = loss_fn(score, batch_data[:, 2])
 
-                losses.append(loss)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_norm)  # clip gradients
-                global_optimizer.step()
-                global_optimizer.zero_grad()
-            print("Epoch {:04d} in static KGE | Ave Loss: {:.4f} ".format(epoch, sum(losses) / len(losses)))
+                    losses.append(loss)
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_norm)  # clip gradients
+                    global_optimizer.step()
+                    global_optimizer.zero_grad()
+                    global_scheduler.step()
+                print("Epoch {:04d} in static KGE | Ave Loss: {:.4f} ".format(epoch, sum(losses) / len(losses)))
         
+            pickle.dump(global_model.ent_embedding, open(pretrained_ent_file, 'wb'))
+            pickle.dump(global_model.rel_embedding, open(pretrained_rel_file, 'wb'))
+        
+        global_model.ent_embedding = pickle.load(open(pretrained_ent_file, 'rb'))
+        global_model.rel_embedding = pickle.load(open(pretrained_rel_file, 'rb'))
 
         print("-----------------------------------start tkge forward----------------------------------\n")
         model.ent_global_embedding.weight.data = global_model.ent_embedding.weight.data
@@ -241,20 +257,20 @@ def run_experiment(args, history_len=None, n_layers=None, dropout=None, n_bases=
                 history_glist = [build_sub_graph(num_nodes, num_rels, snap, use_cuda, args.gpu) for snap in input_list]
                 output = [torch.from_numpy(_).long().cuda() for _ in output] if use_cuda else [torch.from_numpy(_).long() for _ in output]
                 # model.global_forward(global_graph)
-                _, _, loss, loss_e, loss_r, loss_con = model(history_glist, global_graph, output[0])
+                _, _, loss, loss_e, loss_r = model(history_glist, global_graph, output[0])
 
                 losses.append(loss.item())
                 losses_e.append(loss_e.item())
                 losses_r.append(loss_r.item())
-                losses_con.append(loss_con.item())
+                # losses_con.append(loss_con.item())
 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_norm)  # clip gradients
                 optimizer.step()
                 optimizer.zero_grad()
 
-            print("Epoch {:04d} | Ave Loss: {:.4f} | entity-relation-static:{:.4f}-{:.4f}-{:.4f} Best MRR {:.4f} | Model {} "
-                  .format(epoch, np.mean(losses), np.mean(losses_e), np.mean(losses_r), np.mean(losses_con), best_mrr, model_name))
+            print("Epoch {:04d} | Ave Loss: {:.4f} | entity-relation-static:{:.4f}-{:.4f} Best MRR {:.4f} | Model {} "
+                  .format(epoch, np.mean(losses), np.mean(losses_e), np.mean(losses_r), best_mrr, model_name))
 
             # validation
             if epoch and epoch % args.evaluate_every == 0:
@@ -304,7 +320,7 @@ if __name__ == '__main__':
 
     parser.add_argument("--gpu", type=int, default=-1,
                         help="gpu")
-    parser.add_argument("--batch-size", type=int, default=1000,
+    parser.add_argument("--batch-size", type=int, default=2000,
                         help="batch-size")
     parser.add_argument("-d", "--dataset", type=str, required=True,
                         help="dataset to use")
@@ -368,7 +384,7 @@ if __name__ == '__main__':
     # configuration for stat training
     parser.add_argument("--n-epochs", type=int, default=500,
                         help="number of minimum training epochs on each time step")
-    parser.add_argument("--n-global-epochs", type=int, default=10, help='epoch in static KGE')
+    parser.add_argument("--n-global-epochs", type=int, default=30, help='epoch in static KGE')
     parser.add_argument("--lr", type=float, default=0.001,
                         help="learning rate")
     parser.add_argument("--grad-norm", type=float, default=1.0,
@@ -413,7 +429,7 @@ if __name__ == '__main__':
     parser.add_argument("--save", type=str, default="one",
                         help="number of save")
     parser.add_argument("--score-func", type=str, default='rotate', help='score function in static KGE')
-    parser.add_argument("--kge-lr", type=float, default=1e-4, help='learning rate in pretraining')
+    parser.add_argument("--kge-lr", type=float, default=1e-3, help='learning rate in pretraining')
     # configuration for fusion operation
     parser.add_argument("--fuse", type=str, default='gate', help="fusion of global embedding and evolving embedding")
     parser.add_argument("--r-fuse", type=str, default='gate', help="fusion of relation embedding")

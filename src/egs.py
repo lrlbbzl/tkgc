@@ -35,8 +35,8 @@ class EGS(nn.Module):
         nn.init.xavier_normal_(self.rel_global_embedding.weight, gain=1.414)
         nn.init.xavier_normal_(self.rel_evolve_embedding.weight, gain=1.414)
 
-        self.ent_global_embedding.requires_grad_(requires_grad=False)
-        self.rel_global_embedding.requires_grad_(requires_grad=False)
+        # self.ent_global_embedding.requires_grad_(requires_grad=False)
+        # self.rel_global_embedding.requires_grad_(requires_grad=False)
         
         self.num_bases = num_bases
         self.num_basis = num_basis
@@ -174,10 +174,10 @@ class EGS(nn.Module):
 
         logits = last_snap_embs.mm(new_features.t())
         labels = torch.arange(self.num_nodes).to(device)
-        contrastive_loss = self.func(logits, labels)
-        loss = self.task * loss_ent + (1 - self.task) * loss_rel + 0.5 * contrastive_loss
+        # contrastive_loss = self.func(logits, labels)
+        loss = self.task * loss_ent + (1 - self.task) * loss_rel
 
-        return ent_emb, r_emb, loss, loss_ent, loss_rel, contrastive_loss
+        return ent_emb, r_emb, loss, loss_ent, loss_rel
 
     def predict(self, test_graph, num_rels, global_graph, test_triplets):
         with torch.no_grad():
@@ -185,7 +185,7 @@ class EGS(nn.Module):
             inverse_test_triplets[:, 1] = inverse_test_triplets[:, 1] + num_rels  # 将逆关系换成逆关系的id
             all_triples = torch.cat((test_triplets, inverse_test_triplets))
             
-            ent_emb, r_emb, _, _, _, _ = self.forward(test_graph, global_graph, test_triplets)
+            ent_emb, r_emb, _, _, _ = self.forward(test_graph, global_graph, test_triplets)
             embedding = F.normalize(ent_emb) if self.layer_norm else ent_emb
 
             score = self.decoder_ob.forward(embedding, r_emb, all_triples, mode="test")
